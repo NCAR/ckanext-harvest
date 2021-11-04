@@ -685,6 +685,12 @@ def harvest_jobs_run(context, data_dict):
 
     # Resubmit pending objects missing from Redis
     resubmit_objects()
+    
+    #log.debug('Start of commit and close')
+    #session.commit()
+    #log.debug('  (Start of close)')
+    #session.close()
+    #log.debug('End of commit and close')
 
     return []  # merely for backwards compatibility
 
@@ -701,6 +707,9 @@ def get_mail_extra_vars(context, source_id, status):
     for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
         harvest_object_error = report.get(
             'object_errors')[harvest_object_error_key]['errors']
+
+        for error in harvest_object_error:
+            obj_errors.append(error['message'])
 
     ckan_site_url = config.get('ckan.site_url')
     job_url = toolkit.url_for('harvest_job_show', source=source['id'], id=last_job['id'])
@@ -733,6 +742,7 @@ def get_mail_extra_vars(context, source_id, status):
         harvest_configuration = 'Not specified'
 
     errors = job_errors + obj_errors
+
 
     site_url = config.get('ckan.site_url')
     job_url = toolkit.url_for('harvest_job_show', source=source['id'], id=last_job['id'])
