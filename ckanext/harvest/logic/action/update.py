@@ -703,7 +703,9 @@ def get_mail_extra_vars(context, source_id, status):
         'harvest_job_report')(context, {'id': status['last_job']['id']})
     obj_errors = []
     job_errors = []
-    ignored_errors = ['Point extent defined instead of polygon', 'No records to change']
+
+    # List of error messages to suppress notifications for
+    ignored_errors = ['No records to change']
 
     for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
         harvest_object_error = report.get(
