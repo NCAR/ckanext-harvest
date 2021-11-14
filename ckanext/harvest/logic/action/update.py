@@ -703,13 +703,15 @@ def get_mail_extra_vars(context, source_id, status):
         'harvest_job_report')(context, {'id': status['last_job']['id']})
     obj_errors = []
     job_errors = []
+    ignored_errors = ['Point extent defined instead of polygon', 'No records to change']
 
     for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
         harvest_object_error = report.get(
             'object_errors')[harvest_object_error_key]['errors']
 
         for error in harvest_object_error:
-            obj_errors.append(error['message'])
+            if error['message'] not in ignored_errors:
+                obj_errors.append(error['message'])
 
     ckan_site_url = config.get('ckan.site_url')
     job_url = toolkit.url_for('harvest_job_show', source=source['id'], id=last_job['id'])
@@ -727,7 +729,8 @@ def get_mail_extra_vars(context, source_id, status):
         msg += '\n\n'
 
     for harvest_gather_error in islice(report.get('gather_errors'), 0, 20):
-        job_errors.append(harvest_gather_error['message'])
+        if harvest_gather_error['message'] not in ignored_errors:
+            job_errors.append(harvest_gather_error['message'])
 
     if source.get('organization'):
         organization = source['organization']['name']
@@ -786,8 +789,9 @@ def prepare_error_mail(context, source_id, status):
     body = render_jinja2('emails/error_email.txt', extra_vars)
     subject = '{} - Harvesting Job - Error Notification'\
         .format(config.get('ckan.site_title'))
+    num_errors = len(extra_vars['errors'])
 
-    return subject, body
+    return subject, body, num_errors
 
 
 def send_summary_email(context, source_id, status):
@@ -797,9 +801,10 @@ def send_summary_email(context, source_id, status):
 
 
 def send_error_email(context, source_id, status):
-    subject, body = prepare_error_mail(context, source_id, status)
-    recipients = toolkit.get_action('harvest_get_notifications_recipients')(context, {'source_id': source_id})
-    send_mail(recipients, subject, body)
+    subject, body, num_errors = prepare_error_mail(context, source_id, status)
+    if num_errors > 0:
+        recipients = toolkit.get_action('harvest_get_notifications_recipients')(context, {'source_id': source_id})
+        send_mail(recipients, subject, body)
 
 
 #   for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
