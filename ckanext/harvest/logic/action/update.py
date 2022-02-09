@@ -9,18 +9,17 @@ import datetime
 
 from ckantoolkit import config
 from sqlalchemy import and_, or_
+from six.moves.urllib.parse import urljoin
 
 from ckan.lib.search.index import PackageSearchIndex
-from ckan.plugins import PluginImplementations
+from ckan.plugins import toolkit, PluginImplementations
 from ckan.logic import get_action
 from ckanext.harvest.interfaces import IHarvester
 from ckan.lib.search.common import SearchIndexError, make_connection
-
+from ckan.lib.base import render_jinja2
 
 from ckan.model import Package
 from ckan import logic
-from ckan.plugins import toolkit
-
 
 from ckan.logic import NotFound, check_access
 
@@ -30,7 +29,7 @@ from ckanext.harvest.utils import (
 from ckanext.harvest.queue import (
     get_gather_publisher, resubmit_jobs, resubmit_objects)
 
-from ckanext.harvest.model import HarvestSource, HarvestJob, HarvestObject, HarvestGatherError, HarvestObjectError
+from ckanext.harvest.model import HarvestSource, HarvestJob, HarvestObject, HarvestGatherError
 from ckanext.harvest.logic import HarvestJobExists
 from ckanext.harvest.logic.dictization import harvest_job_dictize
 
@@ -236,6 +235,80 @@ def harvest_source_clear(context, data_dict):
     return {'id': harvest_source_id}
 
 
+def harvest_abort_failed_jobs(context, data_dict):
+    session = context['session']
+
+    try:
+        life_span = int(data_dict.get('life_span'))
+    except ValueError:
+        life_span = 7
+
+    include_sid = []
+    exclude_sid = []
+    include = data_dict.get('include')
+
+    if include:
+        include_sid = set(_id for _id in include.split(','))
+
+    # TODO: if included sources provided do we want to use exclude?
+    if data_dict.get('exclude') and not include:
+        exclude_sid = set((_id for _id in data_dict.get('exclude').split(',')))
+
+    # lifespan is based on source update frequency
+    update_map = {
+        'DAILY': 1,
+        'WEEKLY': 7,
+        'BIWEEKLY': 14,
+        'MONTHLY': 30,
+        'MANUAL': life_span,
+        'ALWAYS': life_span
+    }
+
+    current_time = datetime.datetime.utcnow()
+
+    # get all running jobs
+    jobs_list = session.query(HarvestJob.id,
+                              HarvestJob.source_id,
+                              HarvestJob.created) \
+        .filter(HarvestJob.status == 'Running') \
+        .all()
+
+    # filter out not included source job's
+    if include_sid:
+        jobs_list = [
+            job for job in jobs_list
+            if job.source_id in include_sid
+        ]
+
+    if not jobs_list:
+        return 'There is no jobs to abort'
+
+    aborted_counter = 0
+    for job in jobs_list:
+        harvest_source = session.query(HarvestSource.frequency) \
+                                .filter(HarvestSource.id == job.source_id) \
+                                .first()
+
+        life_span = update_map.get(harvest_source.frequency)
+        if not life_span:
+            raise Exception('Frequency {freq} not recognised'.format(
+                freq=harvest_source.frequency))
+
+        expire_date = current_time - datetime.timedelta(days=life_span)
+
+        if not include_sid and job.source_id in exclude_sid:
+            log.info('Excluding source: {}'.format(job.source_id))
+            continue
+        # if job is running too long, abort it
+        if job.created < expire_date:
+            log.info(get_action('harvest_job_abort')(context, {'id': job.id}))
+            aborted_counter += 1
+        else:
+            log.info('{} running less then {} days. Skipping...'.format(job.id, life_span))
+    else:
+        return 'Done. Aborted jobs: {}'.format(aborted_counter)
+
+
 def harvest_sources_job_history_clear(context, data_dict):
     '''
     Clears the history for all active harvest sources. All jobs and objects related to a harvest source will
@@ -415,14 +488,12 @@ def harvest_objects_import(context, data_dict):
             session.query(HarvestObject.id) \
                    .filter(HarvestObject.id == harvest_object_id)
     elif package_id_or_name:
-        last_objects_ids = \
-            session.query(HarvestObject.id) \
-                   .join(Package) \
-                   .filter(
-                HarvestObject.current == True  # noqa: E712
-            ).filter(Package.state == u'active') \
-                   .filter(or_(Package.id == package_id_or_name,
-                               Package.name == package_id_or_name))
+        last_objects_ids = (session.query(HarvestObject.id)
+                            .join(Package)
+                            .filter(HarvestObject.current == True)  # noqa: E712
+                            .filter(Package.state == u'active')
+                            .filter(or_(Package.id == package_id_or_name,
+                                        Package.name == package_id_or_name)))
         join_datasets = False
     else:
         last_objects_ids = \
@@ -503,7 +574,7 @@ def harvest_jobs_run(context, data_dict):
     resubmits queue items if needed.
 
     If ckanext.harvest.timeout is set:
-    Check if the duration of the job is longer than ckanext.harvest.timeout, 
+    Check if the duration of the job is longer than ckanext.harvest.timeout,
     then mark that job as finished as there is probably an underlying issue with the harvest process.
 
     This should be called every few minutes (e.g. by a cron), or else jobs
@@ -537,14 +608,16 @@ def harvest_jobs_run(context, data_dict):
         context, {'source_id': source_id, 'status': u'Running'})
     if len(jobs):
         for job in jobs:
+            job_obj = HarvestJob.get(job['id'])
             if timeout:
-                created = datetime.datetime.strptime(job['created'], '%Y-%m-%d %H:%M:%S.%f')
+                last_time = job_obj.get_last_action_time()
                 now = datetime.datetime.now()
-                if now - created > datetime.timedelta(minutes=int(timeout)):
-                    msg = 'Job timeout: %s is taking longer than %s minutes' % (job['id'], timeout)
-                    log.error(msg)
+                if now - last_time > datetime.timedelta(minutes=int(timeout)):
+                    msg = 'Job {} timeout ({} minutes)\n'.format(job_obj.id, timeout)
+                    msg += '\tJob created: {}\n'.format(job_obj.created)
+                    msg += '\tJob gather finished: {}\n'.format(job_obj.created)
+                    msg += '\tJob last action time: {}\n'.format(last_time)
 
-                    job_obj = HarvestJob.get(job['id'])
                     job_obj.status = u'Finished'
                     job_obj.finished = now
                     job_obj.save()
@@ -552,7 +625,7 @@ def harvest_jobs_run(context, data_dict):
                     err = HarvestGatherError(message=msg, job=job_obj)
                     err.save()
                     log.info('Marking job as finished due to error: %s %s',
-                            job_obj.source.url, job_obj.id)
+                             job_obj.source.url, job_obj.id)
                     continue
 
             if job['gather_finished']:
@@ -564,7 +637,7 @@ def harvest_jobs_run(context, data_dict):
                            .count()
 
                 if num_objects_in_progress == 0:
-                    job_obj = HarvestJob.get(job['id'])
+
                     job_obj.status = u'Finished'
                     log.info('Marking job as finished %s %s',
                              job_obj.source.url, job_obj.id)
@@ -588,14 +661,23 @@ def harvest_jobs_run(context, data_dict):
                     get_action('harvest_source_reindex')(
                         context, {'id': job_obj.source.id})
 
-                    status = get_action('harvest_source_show_status')(context, {'id': job_obj.source.id})
+                    status = get_action('harvest_source_show_status')(
+                        context, {'id': job_obj.source.id})
 
-                    if toolkit.asbool(config.get('ckan.harvest.status_mail.errored'))\
-                            and (status['last_job']['stats']['errored']):
-                        send_error_mail(context, job_obj.source.id, status)
+                    notify_all = toolkit.asbool(config.get('ckan.harvest.status_mail.all'))
+                    notify_errors = toolkit.asbool(config.get('ckan.harvest.status_mail.errored'))
+                    last_job_errors = status['last_job']['stats'].get('errored', 0)
+                    log.debug('Notifications: All:{} On error:{} Errors:{}'.format(notify_all, notify_errors, last_job_errors))
+
+                    if last_job_errors > 0 and (notify_all or notify_errors):
+                        #send_error_mail_ncar(context, job_obj)
+                        #get_mail_extra_vars(context, job_obj.source.id, status)
+                        send_error_email(context, job_obj.source.id, status)
+                    elif notify_all:
+                        send_summary_email(context, job_obj.source.id, status)
                 else:
-                    log.debug('Ongoing job:%s source:%s',
-                              job['id'], job['source_id'])
+                    log.debug('%d Ongoing jobs for %s (source:%s)',
+                              num_objects_in_progress, job['id'], job['source_id'])
     log.debug('No jobs to send to the gather queue')
 
     # Resubmit old redis tasks
@@ -603,14 +685,35 @@ def harvest_jobs_run(context, data_dict):
 
     # Resubmit pending objects missing from Redis
     resubmit_objects()
+    
+    #log.debug('Start of commit and close')
+    #session.commit()
+    #log.debug('  (Start of close)')
+    #session.close()
+    #log.debug('End of commit and close')
 
     return []  # merely for backwards compatibility
 
 
-def send_error_mail(context, source_id, status):
-
+def get_mail_extra_vars(context, source_id, status):
     last_job = status['last_job']
+
     source = get_action('harvest_source_show')(context, {'id': source_id})
+    report = get_action(
+        'harvest_job_report')(context, {'id': status['last_job']['id']})
+    obj_errors = []
+    job_errors = []
+
+    # List of error messages to suppress notifications for
+    ignored_errors = ['No records to change']
+
+    for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
+        harvest_object_error = report.get(
+            'object_errors')[harvest_object_error_key]['errors']
+
+        for error in harvest_object_error:
+            if error['message'] not in ignored_errors:
+                obj_errors.append(error['message'])
 
     ckan_site_url = config.get('ckan.site_url')
     job_url = toolkit.url_for('harvest_job_show', source=source['id'], id=last_job['id'])
@@ -627,85 +730,113 @@ def send_error_mail(context, source_id, status):
         msg += toolkit._('Organization: {0}').format(source['organization']['name'])
         msg += '\n\n'
 
-    msg += toolkit._('Harvest Job Id: {0}').format(last_job['id']) + '\n'
-    msg += toolkit._('Created: {0}').format(last_job['created']) + '\n'
-    msg += toolkit._('Finished: {0}').format(last_job['finished']) + '\n\n'
+    for harvest_gather_error in islice(report.get('gather_errors'), 0, 20):
+        if harvest_gather_error['message'] not in ignored_errors:
+            job_errors.append(harvest_gather_error['message'])
 
-    report = get_action('harvest_job_report')(context, {'id': status['last_job']['id']})
-
-    msg += toolkit._('Records in Error: {0}').format(str(last_job['stats'].get('errored', 0)))
-    msg += '\n'
+    if source.get('organization'):
+        organization = source['organization']['name']
+    else:
+        organization = 'Not specified'
 
     msg += 'For help, please contact the NCAR Data Stewardship Coordinator (mailto:datahelp@ucar.edu).\n\n\n'
 
-    obj_error = ''
-    job_error = ''
+    harvest_configuration = source.get('config')
 
-    for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
-        harvest_object_error = report.get('object_errors')[harvest_object_error_key]['errors']
-        harvest_object_url = report.get('object_errors')[harvest_object_error_key]['original_url']
-        for error in harvest_object_error:
-            obj_error += harvest_object_url + ' :\n\n'
-            obj_error += error['message']
-            if error['line']:
-                obj_error += ' (line ' + str(error['line']) + ')\n\n'
-            else:
-                obj_error += '\n'
+    if harvest_configuration in [None, '', '{}']:
+        harvest_configuration = 'Not specified'
 
-    for harvest_gather_error in islice(report.get('gather_errors'), 0, 20):
-        job_error += harvest_gather_error['message'] + '\n'
-
-    if (obj_error != '' or job_error != ''):
-        msg += toolkit._('Error Summary')
-        msg += '\n'
-
-    if (obj_error != ''):
-        msg += toolkit._('Document Error')
-        msg += '\n' + obj_error + '\n\n'
-
-    if (job_error != ''):
-        msg += toolkit._('Job Errors')
-        msg += '\n' + job_error + '\n\n'
-
-    if obj_error or job_error:
-        msg += '\n--\n'
-        msg += toolkit._('You are receiving this email because you are currently set-up as a member of the Organization {0} for {1}.'
-                         ' Please do not reply to this email as it was sent from a non-monitored address.')\
-            .format(source['organization']['name'], config.get('ckan.site_title'))
-
-        recipients = []
+    errors = job_errors + obj_errors
 
 
-        # gather organization-admins
-        if source.get('organization'):
-            members = get_action('member_list')(context, {
-                'id': source['organization']['id'],
-                'object_type': 'user'
-            })
-            for member in members:
-                member_details = get_action('user_show')(context, {'id': member[0]})
-                if member_details['email']:
-                    recipients.append({
-                        'name': member_details['name'],
-                        'email': member_details['email'],
-                        'capacity': 'admin'
-                    })
+    site_url = config.get('ckan.site_url')
+    job_url = toolkit.url_for('harvest_job_show', source=source['id'], id=last_job['id'])
+    full_job_url = urljoin(site_url, job_url)
+    extra_vars = {
+        'organization': organization,
+        'site_title': config.get('ckan.site_title'),
+        'site_url': site_url,
+        'job_url': full_job_url,
+        'harvest_source_title': source['title'],
+        'harvest_configuration': harvest_configuration,
+        'job_finished': last_job['finished'],
+        'job_id': last_job['id'],
+        'job_created': last_job['created'],
+        'records_in_error': str(last_job['stats'].get('errored', 0)),
+        'records_added': str(last_job['stats'].get('added', 0)),
+        'records_deleted': str(last_job['stats'].get('deleted', 0)),
+        'records_updated': str(last_job['stats'].get('updated', 0)),
+        'error_summary_title': toolkit._('Error Summary'),
+        'obj_errors_title': toolkit._('Document Error'),
+        'job_errors_title': toolkit._('Job Errors'),
+        'obj_errors': obj_errors,
+        'job_errors': job_errors,
+        'errors': errors,
+    }
+
+    return extra_vars
 
 
-        for recipient in recipients:
-            log.debug("Sending email to " + recipient['email'])
-            email = {'recipient_name': recipient['name'],
-                     'recipient_email': recipient['email'],
-                     'subject': config.get('ckan.site_title') + ' - Harvesting Job - Error Notification',
-                     'body': msg}
+def prepare_summary_mail(context, source_id, status):
+    extra_vars = get_mail_extra_vars(context, source_id, status)
+    body = render_jinja2('emails/summary_email.txt', extra_vars)
+    subject = '{} - Harvesting Job Successful - Summary Notification'\
+        .format(config.get('ckan.site_title'))
 
-            try:
-                mailer.mail_recipient(**email)
-            except mailer.MailerException:
-                log.error('Sending Harvest-Notification-Mail failed. Message: ' + msg)
-            except Exception as e:
-                log.error(e)
-                raise
+    return subject, body
+
+
+def prepare_error_mail(context, source_id, status):
+    extra_vars = get_mail_extra_vars(context, source_id, status)
+    body = render_jinja2('emails/error_email.txt', extra_vars)
+    subject = '{} - Harvesting Job - Error Notification'\
+        .format(config.get('ckan.site_title'))
+    num_errors = len(extra_vars['errors'])
+
+    return subject, body, num_errors
+
+
+def send_summary_email(context, source_id, status):
+    subject, body = prepare_summary_mail(context, source_id, status)
+    recipients = toolkit.get_action('harvest_get_notifications_recipients')(context, {'source_id': source_id})
+    send_mail(recipients, subject, body)
+
+
+def send_error_email(context, source_id, status):
+    subject, body, num_errors = prepare_error_mail(context, source_id, status)
+    if num_errors > 0:
+        recipients = toolkit.get_action('harvest_get_notifications_recipients')(context, {'source_id': source_id})
+        send_mail(recipients, subject, body)
+
+
+#   for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
+#       harvest_object_error = report.get('object_errors')[harvest_object_error_key]['errors']
+#       harvest_object_url = report.get('object_errors')[harvest_object_error_key]['original_url']
+#       for error in harvest_object_error:
+#           obj_error += harvest_object_url + ' :\n\n'
+#           obj_error += error['message']
+#           if error['line']:
+#               obj_error += ' (line ' + str(error['line']) + ')\n\n'
+#           else:
+#               obj_error += '\n'
+
+
+def send_mail(recipients, subject, body):
+
+    for recipient in recipients:
+        email = {'recipient_name': recipient['name'],
+                 'recipient_email': recipient['email'],
+                 'subject': subject,
+                 'body': body}
+
+        try:
+            mailer.mail_recipient(**email)
+        except mailer.MailerException:
+            log.error(
+                'Sending Harvest-Notification-Mail failed. Message: ' + body)
+        except Exception as e:
+            log.error(e)
+            raise
 
 
 def harvest_send_job_to_gather_queue(context, data_dict):
@@ -845,7 +976,7 @@ def harvest_source_reindex(context, data_dict):
 
     defer_commit = context.get('defer_commit', False)
 
-    if 'extras_as_string'in context:
+    if 'extras_as_string' in context:
         del context['extras_as_string']
     context.update({'ignore_auth': True})
     package_dict = logic.get_action('harvest_source_show')(

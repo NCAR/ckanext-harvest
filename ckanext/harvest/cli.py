@@ -70,7 +70,7 @@ def show(ctx, id):
     try:
         with flask_app.test_request_context():
             result = utils.show_harvest_source(id)
-    except tk.ObjectNotFound as e:
+    except tk.ObjectNotFound:
         tk.error_shout(u"Source <{}> not found.".format(id))
         raise click.Abort()
     click.echo(result)
@@ -186,10 +186,38 @@ def job_abort(ctx, id):
     with flask_app.test_request_context():
         try:
             result = utils.abort_job(id)
-        except tk.ObjectNotFound as e:
+        except tk.ObjectNotFound:
             tk.error_shout(u"Job not found.")
             ctx.abort()
 
+    click.echo(result)
+
+
+@harvester.command()
+@click.argument("life_span", default=False, required=False)
+@click.option(
+    "-i",
+    "--include",
+    default=False,
+    help="""If source_id provided as included, then only it's failed jobs will be aborted.
+    You can use comma as a separator to provide multiple source_id's""",
+)
+@click.option(
+    "-e",
+    "--exclude",
+    default=False,
+    help="""If source_id provided as excluded, all sources failed jobs, except for that
+    will be aborted. You can use comma as a separator to provide multiple source_id's""",
+)
+@click.pass_context
+def abort_failed_jobs(ctx, life_span, include, exclude):
+    """Abort all jobs which are in a "limbo state" where the job has
+    run with errors but the harvester run command will not mark it
+    as finished, and therefore you cannot run another job.
+    """
+    flask_app = ctx.meta["flask_app"]
+    with flask_app.test_request_context():
+        result = utils.abort_failed_jobs(life_span, include, exclude)
     click.echo(result)
 
 
@@ -316,7 +344,7 @@ def import_stage(
                 package_id,
                 segments,
             )
-        except tk.ObjectNotFound as e:
+        except tk.ObjectNotFound:
             tk.error_shout(u"Source <{}> not found.".format(id))
 
 
