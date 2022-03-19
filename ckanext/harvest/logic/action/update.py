@@ -16,7 +16,12 @@ from ckan.plugins import toolkit, PluginImplementations
 from ckan.logic import get_action
 from ckanext.harvest.interfaces import IHarvester
 from ckan.lib.search.common import SearchIndexError, make_connection
-from ckan.lib.base import render_jinja2
+
+# Use render_jinja2 when work with CKAN core <= 2.9.4
+try:
+    from ckan.lib.base import render_jinja2 as render
+except ImportError:
+    from ckan.lib.base import render
 
 from ckan.model import Package
 from ckan import logic
@@ -319,6 +324,8 @@ def harvest_sources_job_history_clear(context, data_dict):
     '''
     check_access('harvest_sources_clear', context, data_dict)
 
+    keep_current = data_dict.get('keep_current', False)
+
     job_history_clear_results = []
     # We assume that the maximum of 1000 (hard limit) rows should be enough
     result = logic.get_action('package_search')(context, {'fq': '+dataset_type:harvest', 'rows': 1000})
@@ -326,7 +333,8 @@ def harvest_sources_job_history_clear(context, data_dict):
     if harvest_packages:
         for data_dict in harvest_packages:
             try:
-                clear_result = get_action('harvest_source_job_history_clear')(context, {'id': data_dict['id']})
+                clear_result = get_action('harvest_source_job_history_clear')(
+                    context, {'id': data_dict['id'], 'keep_current': keep_current})
                 job_history_clear_results.append(clear_result)
             except NotFound:
                 # Ignoring not existent harvest sources because of a possibly corrupt search index
@@ -349,6 +357,7 @@ def harvest_source_job_history_clear(context, data_dict):
     check_access('harvest_source_clear', context, data_dict)
 
     harvest_source_id = data_dict.get('id', None)
+    keep_current = data_dict.get('keep_current', False)
 
     source = HarvestSource.get(harvest_source_id)
     if not source:
@@ -359,17 +368,51 @@ def harvest_source_job_history_clear(context, data_dict):
 
     model = context['model']
 
-    sql = '''begin;
-    delete from harvest_object_error where harvest_object_id
-     in (select id from harvest_object where harvest_source_id = '{harvest_source_id}');
-    delete from harvest_object_extra where harvest_object_id
-     in (select id from harvest_object where harvest_source_id = '{harvest_source_id}');
-    delete from harvest_object where harvest_source_id = '{harvest_source_id}';
-    delete from harvest_gather_error where harvest_job_id
-     in (select id from harvest_job where source_id = '{harvest_source_id}');
-    delete from harvest_job where source_id = '{harvest_source_id}';
-    commit;
-    '''.format(harvest_source_id=harvest_source_id)
+    if keep_current:
+        sql = '''BEGIN;
+        DELETE FROM harvest_object_error WHERE harvest_object_id
+         IN (SELECT id FROM harvest_object AS obj WHERE harvest_source_id = '{harvest_source_id}'
+             AND current != true
+             AND (NOT EXISTS (SELECT id FROM harvest_job WHERE id = obj.harvest_job_id
+                              AND status = 'Running'))
+             AND (NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = obj.harvest_job_id
+                              AND current = true))
+             );
+        DELETE FROM harvest_object_extra WHERE harvest_object_id
+         IN (SELECT id FROM harvest_object AS obj WHERE harvest_source_id = '{harvest_source_id}'
+             AND current != true
+             AND (NOT EXISTS (SELECT id FROM harvest_job WHERE id = obj.harvest_job_id
+                              AND status = 'Running'))
+             AND (NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = obj.harvest_job_id
+                              AND current = true))
+            );
+        DELETE FROM harvest_object AS obj WHERE harvest_source_id = '{harvest_source_id}'
+         AND current != true
+         AND (NOT EXISTS (SELECT id FROM harvest_job WHERE id = obj.harvest_job_id
+                          AND status = 'Running'))
+         AND (NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = obj.harvest_job_id
+                          AND current = true));
+        DELETE FROM harvest_gather_error WHERE harvest_job_id
+         IN (SELECT id FROM harvest_job AS job WHERE source_id = '{harvest_source_id}'
+             AND job.status != 'Running'
+             AND NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = job.id));
+        DELETE FROM harvest_job AS job WHERE source_id = '{harvest_source_id}'
+         AND job.status != 'Running'
+         AND NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = job.id);
+        COMMIT;
+        '''.format(harvest_source_id=harvest_source_id)
+    else:
+        sql = '''BEGIN;
+        DELETE FROM harvest_object_error WHERE harvest_object_id
+         IN (SELECT id FROM harvest_object WHERE harvest_source_id = '{harvest_source_id}');
+        DELETE FROM harvest_object_extra WHERE harvest_object_id
+         IN (SELECT id FROM harvest_object WHERE harvest_source_id = '{harvest_source_id}');
+        DELETE FROM harvest_object WHERE harvest_source_id = '{harvest_source_id}';
+        DELETE FROM harvest_gather_error WHERE harvest_job_id
+         IN (SELECT id FROM harvest_job WHERE source_id = '{harvest_source_id}');
+        DELETE FROM harvest_job WHERE source_id = '{harvest_source_id}';
+        COMMIT;
+        '''.format(harvest_source_id=harvest_source_id)
 
     model.Session.execute(sql)
 
@@ -611,7 +654,7 @@ def harvest_jobs_run(context, data_dict):
             job_obj = HarvestJob.get(job['id'])
             if timeout:
                 last_time = job_obj.get_last_action_time()
-                now = datetime.datetime.now()
+                now = datetime.datetime.utcnow()
                 if now - last_time > datetime.timedelta(minutes=int(timeout)):
                     msg = 'Job {} timeout ({} minutes)\n'.format(job_obj.id, timeout)
                     msg += '\tJob created: {}\n'.format(job_obj.created)
@@ -779,7 +822,7 @@ def get_mail_extra_vars(context, source_id, status):
 
 def prepare_summary_mail(context, source_id, status):
     extra_vars = get_mail_extra_vars(context, source_id, status)
-    body = render_jinja2('emails/summary_email.txt', extra_vars)
+    body = render('emails/summary_email.txt', extra_vars)
     subject = '{} - Harvesting Job Successful - Summary Notification'\
         .format(config.get('ckan.site_title'))
 
@@ -788,7 +831,7 @@ def prepare_summary_mail(context, source_id, status):
 
 def prepare_error_mail(context, source_id, status):
     extra_vars = get_mail_extra_vars(context, source_id, status)
-    body = render_jinja2('emails/error_email.txt', extra_vars)
+    body = render('emails/error_email.txt', extra_vars)
     subject = '{} - Harvesting Job - Error Notification'\
         .format(config.get('ckan.site_title'))
     num_errors = len(extra_vars['errors'])
