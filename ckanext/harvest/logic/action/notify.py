@@ -1,7 +1,10 @@
 
 import logging
 
-from pylons import config, app_globals
+#Python 2 config import
+#from pylons import config, app_globals
+
+from ckantoolkit import config
 
 from ckan import logic
 from ckan.logic import get_action
@@ -108,7 +111,7 @@ def send_error_mail_ncar(context, job_obj):
                       'body': msg}
 
             try:
-                app_globals._push_object(config['pylons.app_globals'])
+                #app_globals._push_object(config['pylons.app_globals'])
                 mailer.mail_recipient(**email)
             except Exception as e:
                 log.exception(e)
