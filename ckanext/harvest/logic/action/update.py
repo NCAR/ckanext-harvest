@@ -403,13 +403,26 @@ def harvest_source_job_history_clear(context, data_dict):
     else:
         sql = '''BEGIN;
         DELETE FROM harvest_object_error WHERE harvest_object_id
-         IN (SELECT id FROM harvest_object WHERE harvest_source_id = '{harvest_source_id}');
+         IN (SELECT id FROM harvest_object AS obj WHERE harvest_source_id = '{harvest_source_id}'
+             AND current != true
+             AND (NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = obj.harvest_job_id
+                              AND current = true))
+             );
         DELETE FROM harvest_object_extra WHERE harvest_object_id
-         IN (SELECT id FROM harvest_object WHERE harvest_source_id = '{harvest_source_id}');
-        DELETE FROM harvest_object WHERE harvest_source_id = '{harvest_source_id}';
+         IN (SELECT id FROM harvest_object AS obj WHERE harvest_source_id = '{harvest_source_id}'
+             AND current != true
+             AND (NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = obj.harvest_job_id
+                              AND current = true))
+            );
+        DELETE FROM harvest_object AS obj WHERE harvest_source_id = '{harvest_source_id}'
+         AND current != true
+         AND (NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = obj.harvest_job_id
+                          AND current = true));
         DELETE FROM harvest_gather_error WHERE harvest_job_id
-         IN (SELECT id FROM harvest_job WHERE source_id = '{harvest_source_id}');
-        DELETE FROM harvest_job WHERE source_id = '{harvest_source_id}';
+         IN (SELECT id FROM harvest_job AS job WHERE source_id = '{harvest_source_id}'
+             AND NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = job.id));
+        DELETE FROM harvest_job AS job WHERE source_id = '{harvest_source_id}'
+         AND NOT EXISTS (SELECT id FROM harvest_object WHERE harvest_job_id = job.id);
         COMMIT;
         '''.format(harvest_source_id=harvest_source_id)
 
