@@ -450,9 +450,14 @@ def harvest_get_notifications_recipients(context, data_dict):
             'capacity': 'admin'
         })
 
+        # run user_show action with sysadmin privs, to get email address access
+        context['user'] = 'admin'
         for member in members:
             member_details = p.toolkit.get_action(
-                'user_show')(context, {'id': member[0]})
+                'user_show')(context, {
+                               'id': member[0],
+                               'include_plugin_extras': True
+                             })
 
             if member_details.get('email', None):
                 recipients.append({
