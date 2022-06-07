@@ -461,7 +461,6 @@ def harvest_get_notifications_recipients(context, data_dict):
                                'id': member[0],
                                'include_plugin_extras': True
                              })
-            log.debug('Member details: %r', member_details)
 
             email_address = member_details.get('email', None)
             if email_address and email_address.strip():
@@ -469,6 +468,5 @@ def harvest_get_notifications_recipients(context, data_dict):
                     'name': member_details['name'],
                     'email': member_details['email']
                 })
-        log.debug('Email recipients: %r', recipients)
-
+                
     return recipients
