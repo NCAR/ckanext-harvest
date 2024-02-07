@@ -752,6 +752,20 @@ def get_mail_extra_vars(context, source_id, status):
             'object_errors')[harvest_object_error_key]['errors']
 
         for error in harvest_object_error:
+            unreferenced_group_error = "Unreferenced Collection" in error['message']
+            if unreferenced_group_error:
+                group_id = error['message'].split()[-1]
+                try:
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    group_state = group_dict['state']
+                except logic.NotFound:
+                    group_state = 'deleted'
+
+                # If the group is not empty, skip this error; some dataset must have been added back to the group.
+                # If the group status is not 'active', then no parent ISO record was harvested for parent metadata.
+                if group_state == 'active' and group_dict['package_count'] > 0:
+                    # Do not add this error to the final list
+                    continue
             if error['message'] not in ignored_errors:
                 obj_errors.append(error['message'])
 
