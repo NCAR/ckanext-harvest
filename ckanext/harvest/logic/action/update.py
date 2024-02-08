@@ -755,7 +755,7 @@ def get_mail_extra_vars(context, source_id, status):
                 obj_errors.append(error['message'])
 
     ckan_site_url = config.get('ckan.site_url')
-    job_url = toolkit.url_for('harvest_job_show', source=source['id'], id=last_job['id'])
+    job_url = toolkit.url_for('harvester.job_show', source=source['id'], id=last_job['id'])
 
     msg = 'This is a failure-notification of the latest harvest job on ' + ckan_site_url + '.\n\n'
     msg += 'Harvest Job URL: ' + ckan_site_url + job_url + '\n\n'
