@@ -743,6 +743,9 @@ def get_mail_extra_vars(context, source_id, status):
         'harvest_job_report')(context, {'id': status['last_job']['id']})
     obj_errors = []
     job_errors = []
+    context.update({
+        'ignore_auth': True,
+    })
 
     # List of error messages to suppress notifications for
     ignored_errors = ['No records to change']
