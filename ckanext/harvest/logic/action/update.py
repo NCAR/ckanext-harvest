@@ -748,9 +748,10 @@ def get_mail_extra_vars(context, source_id, status):
     })
 
     # List of error messages to suppress notifications for
-    ignored_errors = ['No records to change']
+    ignored_errors = ['No records to change', 'Point extent defined instead of polygon']
+    error_report = islice(report.get('object_errors'), None)
 
-    for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
+    for harvest_object_error_key in error_report:
         harvest_object_error = report.get(
             'object_errors')[harvest_object_error_key]['errors']
 
@@ -759,15 +760,16 @@ def get_mail_extra_vars(context, source_id, status):
             if unreferenced_group_error:
                 group_id = error['message'].split()[-1]
                 try:
+                    context.pop('__auth_audit', None)
                     group_dict = logic.get_action('group_show')(context, {'id': group_id})
-                    group_state = group_dict['state']
+                    is_updated_group = len(group_dict['extras']) > 0
                 except logic.NotFound:
-                    group_state = 'deleted'
+                    is_updated_group = False
 
+                # If is_updated_group is False, then no parent ISO record was harvested for parent metadata.
                 # If the group is not empty, skip this error; some dataset must have been added back to the group.
-                # If the group status is not 'active', then no parent ISO record was harvested for parent metadata.
-                if group_state == 'active' and group_dict['package_count'] > 0:
-                    # Do not add this error to the final list
+                if is_updated_group and group_dict['package_count'] > 0:
+                    # Do not add this warning/error to the final list
                     continue
             if error['message'] not in ignored_errors:
                 obj_errors.append(error['message'])
