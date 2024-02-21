@@ -770,7 +770,7 @@ def get_mail_extra_vars(context, source_id, status):
                 if is_updated_group:
                     continue
 
-            empty_group_warning = "Empty Collection" in error['message']
+            empty_group_warning = "Created Empty Collection" in error['message']
             if empty_group_warning:
                 group_id = error['message'].split()[-1]
                 try:
@@ -784,7 +784,7 @@ def get_mail_extra_vars(context, source_id, status):
                     # Do not add this warning/error to the final list
                     continue
 
-            nonempty_group_warning = "Non-empty Collection" in error['message']
+            nonempty_group_warning = "Deleted Non-empty Collection" in error['message']
             if nonempty_group_warning:
                 # If the group is now empty at the end of harvesting, skip the warning and purge the collection.
                 group_id = error['message'].split()[-1]
@@ -796,8 +796,8 @@ def get_mail_extra_vars(context, source_id, status):
                         logic.get_action('group_purge')(context, {'id': group_id})
                         continue
                 except logic.NotFound:
-                    # This should not happen
-                    assert False
+                    # If the group was deleted later, skip this error.
+                    continue
 
             if error['message'] not in ignored_errors:
                 obj_errors.append(error['message'])
