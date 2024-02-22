@@ -786,17 +786,19 @@ def get_mail_extra_vars(context, source_id, status):
 
             nonempty_group_warning = "Deleted Non-empty Collection" in error['message']
             if nonempty_group_warning:
-                # If the group is now empty at the end of harvesting, skip the warning and purge the collection.
+                # If the group is empty at the end of harvesting, skip the warning and purge the collection.
                 group_id = error['message'].split()[-1]
                 try:
+                    context.pop('__auth_audit', None)
                     group_dict = logic.get_action('group_show')(context, {'id': group_id})
                     is_group_empty = group_dict['package_count'] == 0
+                    # Always purge the group/collection because the WAF no longer has a record for it.
+                    context.pop('__auth_audit', None)
+                    logic.get_action('group_purge')(context, {'id': group_id})
                     if is_group_empty:
-                        context.pop('__auth_audit', None)
-                        logic.get_action('group_purge')(context, {'id': group_id})
                         continue
                 except logic.NotFound:
-                    # If the group was deleted later, skip this error.
+                    # If the group is not found, it was deleted from the WAF, and the warning no longer applies.
                     continue
 
             if error['message'] not in ignored_errors:
