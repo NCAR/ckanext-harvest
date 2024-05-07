@@ -35,8 +35,6 @@ from ckanext.harvest.logic.dictization import harvest_job_dictize
 from ckanext.harvest.logic.action.get import (
     harvest_source_show, harvest_job_list, _get_sources_for_user)
 
-#from ckanext.harvest.logic.action.notify import send_error_mail_ncar
-
 import ckan.lib.mailer as mailer
 from itertools import islice
 
@@ -287,8 +285,8 @@ def harvest_abort_failed_jobs(context, data_dict):
     aborted_counter = 0
     for job in jobs_list:
         harvest_source = session.query(HarvestSource.frequency) \
-            .filter(HarvestSource.id == job.source_id) \
-            .first()
+                                .filter(HarvestSource.id == job.source_id) \
+                                .first()
 
         life_span = update_map.get(harvest_source.frequency)
         if not life_span:
@@ -503,8 +501,8 @@ def harvest_objects_import(context, data_dict):
     if guid:
         last_objects_ids = \
             session.query(HarvestObject.id) \
-                .filter(HarvestObject.guid == guid) \
-                .filter(HarvestObject.current == True)  # noqa: E712
+                   .filter(HarvestObject.guid == guid) \
+                   .filter(HarvestObject.current == True)  # noqa: E712
 
     elif source_id:
         source = HarvestSource.get(source_id)
@@ -518,14 +516,14 @@ def harvest_objects_import(context, data_dict):
 
         last_objects_ids = \
             session.query(HarvestObject.id) \
-                .join(HarvestSource) \
-                .filter(HarvestObject.source == source) \
-                .filter(HarvestObject.current == True)  # noqa: E712
+                   .join(HarvestSource) \
+                   .filter(HarvestObject.source == source) \
+                   .filter(HarvestObject.current == True)  # noqa: E712
 
     elif harvest_object_id:
         last_objects_ids = \
             session.query(HarvestObject.id) \
-                .filter(HarvestObject.id == harvest_object_id)
+                   .filter(HarvestObject.id == harvest_object_id)
     elif package_id_or_name:
         last_objects_ids = (session.query(HarvestObject.id)
                             .join(Package)
@@ -537,7 +535,7 @@ def harvest_objects_import(context, data_dict):
     else:
         last_objects_ids = \
             session.query(HarvestObject.id) \
-                .filter(HarvestObject.current == True)  # noqa: E712
+                   .filter(HarvestObject.current == True)  # noqa: E712
 
     if join_datasets:
         last_objects_ids = last_objects_ids.join(Package) \
@@ -568,6 +566,7 @@ def harvest_objects_import(context, data_dict):
 
 
 def _calculate_next_run(frequency):
+
     now = datetime.datetime.utcnow()
     if frequency == 'ALWAYS':
         return now
@@ -592,6 +591,7 @@ def _calculate_next_run(frequency):
 
 
 def _make_scheduled_jobs(context, data_dict):
+
     data_dict = {'only_to_run': True,
                  'only_active': True}
     sources = _get_sources_for_user(context, data_dict)
@@ -670,10 +670,10 @@ def harvest_jobs_run(context, data_dict):
             if job['gather_finished']:
                 num_objects_in_progress = \
                     session.query(HarvestObject.id) \
-                        .filter(HarvestObject.harvest_job_id == job['id']) \
-                        .filter(and_((HarvestObject.state != u'COMPLETE'),
-                                     (HarvestObject.state != u'ERROR'))) \
-                        .count()
+                           .filter(HarvestObject.harvest_job_id == job['id']) \
+                           .filter(and_((HarvestObject.state != u'COMPLETE'),
+                                        (HarvestObject.state != u'ERROR'))) \
+                           .count()
 
                 if num_objects_in_progress == 0:
 
@@ -709,8 +709,6 @@ def harvest_jobs_run(context, data_dict):
                     log.debug('Notifications: All:{} On error:{} Errors:{}'.format(notify_all, notify_errors, last_job_errors))
 
                     if last_job_errors > 0 and (notify_all or notify_errors):
-                        # send_error_mail_ncar(context, job_obj)
-                        # get_mail_extra_vars(context, job_obj.source.id, status)
                         send_error_email(context, job_obj.source.id, status)
                     elif notify_all:
                         send_summary_email(context, job_obj.source.id, status)
@@ -725,12 +723,6 @@ def harvest_jobs_run(context, data_dict):
     # Resubmit pending objects missing from Redis
     resubmit_objects()
 
-    # log.debug('Start of commit and close')
-    # session.commit()
-    # log.debug('  (Start of close)')
-    # session.close()
-    # log.debug('End of commit and close')
-
     return []  # merely for backwards compatibility
 
 
@@ -744,30 +736,61 @@ def get_mail_extra_vars(context, source_id, status):
     job_errors = []
 
     # List of error messages to suppress notifications for
-    ignored_errors = ['No records to change']
+    ignored_errors = ['No records to change', 'Point extent defined instead of polygon']
+    error_report = islice(report.get('object_errors'), None)
 
-    for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
+    for harvest_object_error_key in error_report:
         harvest_object_error = report.get(
             'object_errors')[harvest_object_error_key]['errors']
 
         for error in harvest_object_error:
+            unreferenced_group_error = "Unreferenced Collection" in error['message']
+            if unreferenced_group_error:
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    is_updated_group = len(group_dict['extras']) > 0
+                except logic.NotFound:
+                    is_updated_group = False
+                # If is_updated_group is True, then at some point the parent ISO record was harvested for parent metadata.
+                # In that case, do not add this warning/error to the final list.
+                if is_updated_group:
+                    continue
+
+            empty_group_warning = "Created Empty Collection" in error['message']
+            if empty_group_warning:
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    deleted_or_not_empty = group_dict['package_count'] > 0
+                except logic.NotFound:
+                    deleted_or_not_empty = True
+                # If the group is not empty, skip this error; some dataset must have been added back to the group.
+                if deleted_or_not_empty:
+                    # Do not add this warning/error to the final list
+                    continue
+
+            nonempty_group_warning = "Deleted Non-empty Collection" in error['message']
+            if nonempty_group_warning:
+                # If the group is empty at the end of harvesting, skip the warning and purge the collection.
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    is_group_empty = group_dict['package_count'] == 0
+                    # Always purge the group/collection because the WAF no longer has a record for it.
+                    context.pop('__auth_audit', None)
+                    logic.get_action('group_purge')(context, {'id': group_id})
+                    if is_group_empty:
+                        continue
+                except logic.NotFound:
+                    # If the group is not found, it was deleted from the WAF, and the warning no longer applies.
+                    continue
+
             if error['message'] not in ignored_errors:
                 obj_errors.append(error['message'])
-
-    ckan_site_url = config.get('ckan.site_url')
-    job_url = toolkit.url_for('harvester.job_show', source=source['id'], id=last_job['id'])
-
-    msg = 'This is a failure-notification of the latest harvest job on ' + ckan_site_url + '.\n\n'
-    msg += 'Harvest Job URL: ' + ckan_site_url + job_url + '\n\n'
-
-    msg += toolkit._('Harvest Source: {0}').format(source['title']) + '\n'
-    if source.get('config'):
-        msg += toolkit._('Harvester-Configuration: {0}').format(source['config']) + '\n'
-    msg += '\n\n'
-
-    if source['organization']:
-        msg += toolkit._('Organization: {0}').format(source['organization']['name'])
-        msg += '\n\n'
 
     for harvest_gather_error in islice(report.get('gather_errors'), 0, 20):
         if harvest_gather_error['message'] not in ignored_errors:
@@ -778,7 +801,7 @@ def get_mail_extra_vars(context, source_id, status):
     else:
         organization = 'Not specified'
 
-    msg += 'For help, please contact the NCAR Data Stewardship Coordinator (mailto:datahelp@ucar.edu).\n\n\n'
+    #msg += 'For help, please contact the NCAR Data Stewardship Coordinator (mailto:datahelp@ucar.edu).\n\n\n'
 
     harvest_configuration = source.get('config')
 
@@ -818,7 +841,7 @@ def get_mail_extra_vars(context, source_id, status):
 def prepare_summary_mail(context, source_id, status):
     extra_vars = get_mail_extra_vars(context, source_id, status)
     body = render('emails/summary_email.txt', extra_vars)
-    subject = '{} - Harvesting Job Successful - Summary Notification' \
+    subject = '{} - Harvesting Job Successful - Summary Notification'\
         .format(config.get('ckan.site_title'))
 
     return subject, body
@@ -830,6 +853,7 @@ def prepare_error_mail(context, source_id, status):
     body = html.unescape(body)
 
     subject = '{} - Harvesting Job - Error Notification'.format(config.get('ckan.site_title'))
+
     num_errors = len(extra_vars['errors'])
 
     return subject, body, num_errors
@@ -848,19 +872,8 @@ def send_error_email(context, source_id, status):
         send_mail(recipients, subject, body)
 
 
-#   for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
-#       harvest_object_error = report.get('object_errors')[harvest_object_error_key]['errors']
-#       harvest_object_url = report.get('object_errors')[harvest_object_error_key]['original_url']
-#       for error in harvest_object_error:
-#           obj_error += harvest_object_url + ' :\n\n'
-#           obj_error += error['message']
-#           if error['line']:
-#               obj_error += ' (line ' + str(error['line']) + ')\n\n'
-#           else:
-#               obj_error += '\n'
-
-
 def send_mail(recipients, subject, body):
+
     for recipient in recipients:
         email = {'recipient_name': recipient['name'],
                  'recipient_email': recipient['email'],
@@ -942,8 +955,8 @@ def harvest_job_abort(context, data_dict):
             # Do not use harvest_job_list since it can use a lot of memory
             # Get the most recent job for the source
             job = model.Session.query(HarvestJob) \
-                .filter_by(source_id=source['id']) \
-                .order_by(HarvestJob.created.desc()).first()
+                       .filter_by(source_id=source['id']) \
+                       .order_by(HarvestJob.created.desc()).first()
             if not job:
                 raise NotFound('Error: source has no jobs')
             job_id = job.id
@@ -990,9 +1003,9 @@ def harvest_sources_reindex(context, data_dict):
     model = context['model']
 
     packages = model.Session.query(model.Package) \
-        .filter(model.Package.type == DATASET_TYPE_NAME) \
-        .filter(model.Package.state == u'active') \
-        .all()
+                            .filter(model.Package.type == DATASET_TYPE_NAME) \
+                            .filter(model.Package.state == u'active') \
+                            .all()
 
     package_index = PackageSearchIndex()
 
