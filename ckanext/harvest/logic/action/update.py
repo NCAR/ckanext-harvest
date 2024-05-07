@@ -742,15 +742,64 @@ def get_mail_extra_vars(context, source_id, status):
         'harvest_job_report')(context, {'id': status['last_job']['id']})
     obj_errors = []
     job_errors = []
+    context.update({
+        'ignore_auth': True,
+    })
 
     # List of error messages to suppress notifications for
-    ignored_errors = ['No records to change']
+    ignored_errors = ['No records to change', 'Point extent defined instead of polygon']
+    error_report = islice(report.get('object_errors'), None)
 
-    for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
+    for harvest_object_error_key in error_report:
         harvest_object_error = report.get(
             'object_errors')[harvest_object_error_key]['errors']
 
         for error in harvest_object_error:
+            unreferenced_group_error = "Unreferenced Collection" in error['message']
+            if unreferenced_group_error:
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    is_updated_group = len(group_dict['extras']) > 0
+                except logic.NotFound:
+                    is_updated_group = False
+                # If is_updated_group is True, then at some point the parent ISO record was harvested for parent metadata.
+                # In that case, do not add this warning/error to the final list.
+                if is_updated_group:
+                    continue
+
+            empty_group_warning = "Created Empty Collection" in error['message']
+            if empty_group_warning:
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    deleted_or_not_empty = group_dict['package_count'] > 0
+                except logic.NotFound:
+                    deleted_or_not_empty = True
+                # If the group is not empty, skip this error; some dataset must have been added back to the group.
+                if deleted_or_not_empty:
+                    # Do not add this warning/error to the final list
+                    continue
+
+            nonempty_group_warning = "Deleted Non-empty Collection" in error['message']
+            if nonempty_group_warning:
+                # If the group is empty at the end of harvesting, skip the warning and purge the collection.
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    is_group_empty = group_dict['package_count'] == 0
+                    # Always purge the group/collection because the WAF no longer has a record for it.
+                    context.pop('__auth_audit', None)
+                    logic.get_action('group_purge')(context, {'id': group_id})
+                    if is_group_empty:
+                        continue
+                except logic.NotFound:
+                    # If the group is not found, it was deleted from the WAF, and the warning no longer applies.
+                    continue
+
             if error['message'] not in ignored_errors:
                 obj_errors.append(error['message'])
 
