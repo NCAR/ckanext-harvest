@@ -801,7 +801,7 @@ def get_mail_extra_vars(context, source_id, status):
     else:
         organization = 'Not specified'
 
-    #msg += 'For help, please contact the NCAR Data Stewardship Coordinator (mailto:datahelp@ucar.edu).\n\n\n'
+    # msg += 'For help, please contact the NCAR Data Stewardship Coordinator (mailto:datahelp@ucar.edu).\n\n\n'
 
     harvest_configuration = source.get('config')
 
