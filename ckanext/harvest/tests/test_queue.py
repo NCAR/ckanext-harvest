@@ -1,5 +1,8 @@
 import pytest
-from mock import patch
+try:
+    from unittest.mock import patch
+except ImportError:
+    from mock import patch
 
 from ckanext.harvest.model import HarvestObject, HarvestObjectExtra
 from ckanext.harvest.interfaces import IHarvester
@@ -85,7 +88,7 @@ class MockHarvester(SingletonPlugin):
         return True
 
 
-@pytest.mark.usefixtures('with_plugins', 'clean_db', 'harvest_setup', 'clean_queues')
+@pytest.mark.usefixtures('with_plugins', 'clean_db', 'clean_queues')
 @pytest.mark.ckan_config('ckan.plugins', 'harvest test_harvester')
 class TestHarvestQueue(object):
 

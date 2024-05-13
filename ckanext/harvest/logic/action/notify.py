@@ -86,14 +86,13 @@ def send_error_mail_ncar(context, job_obj):
         usernames = [x['name'] for x in org_dict['users']]
         log.debug("usernames == " + ','.join(usernames))
 
-        # get emails for users 
+        # get emails for users
         email_recipients = []
         for username in usernames:
             user_dict = toolkit.get_action('user_show')(context, {'id': username})
             email_recipients.append(user_dict['email'])
 
         log.debug("email_recipients == " + ','.join(email_recipients))
-        emails = {}
 
         for recipient in email_recipients:
             email = {'recipient_name': recipient,
