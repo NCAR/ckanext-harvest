@@ -735,20 +735,73 @@ def get_mail_extra_vars(context, source_id, status):
     obj_errors = []
     job_errors = []
 
-    for harvest_object_error_key in islice(report.get('object_errors'), 0, 20):
+    # List of error messages to suppress notifications for
+    ignored_errors = ['No records to change', 'Point extent defined instead of polygon']
+    error_report = islice(report.get('object_errors'), None)
+
+    for harvest_object_error_key in error_report:
         harvest_object_error = report.get(
             'object_errors')[harvest_object_error_key]['errors']
 
         for error in harvest_object_error:
-            obj_errors.append(error['message'])
+            unreferenced_group_error = "Unreferenced Collection" in error['message']
+            if unreferenced_group_error:
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    is_updated_group = len(group_dict['extras']) > 0
+                except logic.NotFound:
+                    is_updated_group = False
+                # If is_updated_group is True, then at some point the parent ISO record was harvested for parent metadata.
+                # In that case, do not add this warning/error to the final list.
+                if is_updated_group:
+                    continue
+
+            empty_group_warning = "Created Empty Collection" in error['message']
+            if empty_group_warning:
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    deleted_or_not_empty = group_dict['package_count'] > 0
+                except logic.NotFound:
+                    deleted_or_not_empty = True
+                # If the group is not empty, skip this error; some dataset must have been added back to the group.
+                if deleted_or_not_empty:
+                    # Do not add this warning/error to the final list
+                    continue
+
+            nonempty_group_warning = "Deleted Non-empty Collection" in error['message']
+            if nonempty_group_warning:
+                # If the group is empty at the end of harvesting, skip the warning and purge the collection.
+                group_id = error['message'].split()[-1]
+                try:
+                    context.pop('__auth_audit', None)
+                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    is_group_empty = group_dict['package_count'] == 0
+                    # Always purge the group/collection because the WAF no longer has a record for it.
+                    context.pop('__auth_audit', None)
+                    logic.get_action('group_purge')(context, {'id': group_id})
+                    if is_group_empty:
+                        continue
+                except logic.NotFound:
+                    # If the group is not found, it was deleted from the WAF, and the warning no longer applies.
+                    continue
+
+            if error['message'] not in ignored_errors:
+                obj_errors.append(error['message'])
 
     for harvest_gather_error in islice(report.get('gather_errors'), 0, 20):
-        job_errors.append(harvest_gather_error['message'])
+        if harvest_gather_error['message'] not in ignored_errors:
+            job_errors.append(harvest_gather_error['message'])
 
     if source.get('organization'):
         organization = source['organization']['name']
     else:
         organization = 'Not specified'
+
+    #msg += 'For help, please contact the NCAR Data Stewardship Coordinator (mailto:datahelp@ucar.edu).\n\n\n'
 
     harvest_configuration = source.get('config')
 
@@ -801,8 +854,9 @@ def prepare_error_mail(context, source_id, status):
 
     subject = '{} - Harvesting Job - Error Notification'\
         .format(config.get('ckan.site_title'))
+    num_errors = len(extra_vars['errors'])
 
-    return subject, body
+    return subject, body, num_errors
 
 
 def send_summary_email(context, source_id, status):
@@ -812,9 +866,10 @@ def send_summary_email(context, source_id, status):
 
 
 def send_error_email(context, source_id, status):
-    subject, body = prepare_error_mail(context, source_id, status)
-    recipients = toolkit.get_action('harvest_get_notifications_recipients')(context, {'source_id': source_id})
-    send_mail(recipients, subject, body)
+    subject, body, num_errors = prepare_error_mail(context, source_id, status)
+    if num_errors > 0:
+        recipients = toolkit.get_action('harvest_get_notifications_recipients')(context, {'source_id': source_id})
+        send_mail(recipients, subject, body)
 
 
 def send_mail(recipients, subject, body):
