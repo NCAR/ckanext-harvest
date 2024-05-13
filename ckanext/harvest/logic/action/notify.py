@@ -1,27 +1,16 @@
-
 import logging
 
-#Python 2 config import
-#from pylons import config, app_globals
-
+import ckan.lib.mailer as mailer
+from ckan.logic import get_action
+from ckan.plugins import toolkit
+from ckanext.harvest.logic.dictization import harvest_job_dictize
 from ckantoolkit import config
 
-from ckan import logic
-from ckan.logic import get_action
-
-from ckan.plugins import toolkit
-
-
-from ckanext.harvest.logic.dictization import harvest_job_dictize
-
-import ckan.lib.mailer as mailer
 
 log = logging.getLogger(__name__)
 
 
-
 def send_error_mail_ncar(context, job_obj):
-
     sql = 'select name from package where id = :source_id;'
 
     model = context['model']
@@ -66,30 +55,32 @@ def send_error_mail_ncar(context, job_obj):
     msg += 'For help, please contact the NCAR Data Stewardship Coordinator (mailto:datahelp@ucar.edu).\n\n\n'
 
     if numRecordsInError <= 20:
-       errored_object_keys = errored_object_keys[:20]
-       for key in errored_object_keys:
-           error_dict = error_dicts[key]
-           msg += error_dict['original_url'] + ' :\n\n'
-           for error in error_dict['errors']:
-               msg += error['message']
-               if error['line']:
-                  msg += ' (line ' + str(error['line']) + ')\n\n'
-               else:
-                  msg += '\n'
-           msg += '\n\n'
+        errored_object_keys = errored_object_keys[:20]
+        for key in errored_object_keys:
+            error_dict = error_dicts[key]
+            msg += error_dict['original_url'] + ' :\n\n'
+            for error in error_dict['errors']:
+                msg += error['message']
+                if error['line']:
+                    msg += ' (line ' + str(error['line']) + ')\n\n'
+                else:
+                    msg += '\n'
+            msg += '\n\n'
     else:
-       for key in errored_object_keys:
-           msg += error_dicts[key]['original_url'] + '\n\n'
-       msg += '\n\nError Messages are suppressed if there are more than 20 records with errors.\n'
+        for key in errored_object_keys:
+            msg += error_dicts[key]['original_url'] + '\n\n'
+        msg += '\n\nError Messages are suppressed if there are more than 20 records with errors.\n'
 
     log.debug("msg == " + msg)
 
     if numRecordsInError > 0:
-        msg += '\n--\nYou are receiving this email because you are currently set-up as a member of the Organization "' + orgName + '" for ' + config.get('ckan.site_title') + '. Please do not reply to this email as it was sent from a non-monitored address.'
+        msg += '\n--\nYou are receiving this email because you are currently set-up as a member of the ' + \
+                'Organization "' + orgName + '" for ' + config.get('ckan.site_title') + \
+               '. Please do not reply to this email as it was sent from a non-monitored address.'
 
         # get org info
         log.debug('orgName == ' + orgName)
-        org_dict = toolkit.get_action('organization_show')(context, {'id' : orgName.lower(), 'include_users': True})
+        org_dict = toolkit.get_action('organization_show')(context, {'id': orgName.lower(), 'include_users': True})
 
         # get usernames in org
         usernames = [x['name'] for x in org_dict['users']]
@@ -98,7 +89,7 @@ def send_error_mail_ncar(context, job_obj):
         # get emails for users 
         email_recipients = []
         for username in usernames:
-            user_dict = toolkit.get_action('user_show')(context, {'id' : username})
+            user_dict = toolkit.get_action('user_show')(context, {'id': username})
             email_recipients.append(user_dict['email'])
 
         log.debug("email_recipients == " + ','.join(email_recipients))
@@ -106,15 +97,12 @@ def send_error_mail_ncar(context, job_obj):
 
         for recipient in email_recipients:
             email = {'recipient_name': recipient,
-                      'recipient_email': recipient,
-                      'subject': config.get('ckan.site_title') + ' - Harvesting Job - Error Notification',
-                      'body': msg}
+                     'recipient_email': recipient,
+                     'subject': config.get('ckan.site_title') + ' - Harvesting Job - Error Notification',
+                     'body': msg}
 
             try:
-                #app_globals._push_object(config['pylons.app_globals'])
                 mailer.mail_recipient(**email)
             except Exception as e:
                 log.exception(e)
                 log.error('Sending Harvest-Notification-Mail failed. Message: ' + msg)
-
-
