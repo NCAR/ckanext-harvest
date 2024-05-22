@@ -786,8 +786,8 @@ def get_mail_extra_vars(context, source_id, status):
                     if is_group_empty:
                         continue
                 except logic.NotFound:
-                    # If the group is not found, it was deleted from the WAF, and the warning no longer applies.
-                    continue
+                    # The group should be found if there was a warning raised, so this point should not be reached.
+                    raise
 
             if error['message'] not in ignored_errors:
                 obj_errors.append(error['message'])
