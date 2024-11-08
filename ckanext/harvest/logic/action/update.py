@@ -764,11 +764,14 @@ def get_mail_extra_vars(context, source_id, status):
                 try:
                     context.pop('__auth_audit', None)
                     group_dict = logic.get_action('group_show')(context, {'id': group_id})
-                    deleted_or_not_empty = group_dict['package_count'] > 0
+                    is_empty = group_dict['package_count'] == 0
+                    is_deleted = False
                 except logic.NotFound:
-                    deleted_or_not_empty = True
+                    log.debug('Group not found with ID {0}'.format(group_id))
+                    is_empty = True
+                    is_deleted = True
                 # If the group is not empty, skip this error; some dataset must have been added back to the group.
-                if deleted_or_not_empty:
+                if is_deleted or not is_empty:
                     # Do not add this warning/error to the final list
                     continue
 
