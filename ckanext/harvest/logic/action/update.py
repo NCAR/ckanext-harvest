@@ -40,6 +40,8 @@ from itertools import islice
 
 from ckan.plugins.toolkit import render
 
+from ckanext.dsetsearch.group_api import getGroupNameFromID
+
 log = logging.getLogger(__name__)
 
 
@@ -746,10 +748,11 @@ def get_mail_extra_vars(context, source_id, status):
         for error in harvest_object_error:
             unreferenced_group_error = "Unreferenced Collection" in error['message']
             if unreferenced_group_error:
-                group_id = error['message'].split()[-1]
+                parent_id = error['message'].split()[-1]
+                group_name = getGroupNameFromID(parent_id)
                 try:
                     context.pop('__auth_audit', None)
-                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    group_dict = logic.get_action('group_show')(context, {'id': group_name})
                     is_updated_group = len(group_dict['extras']) > 0
                 except logic.NotFound:
                     is_updated_group = False
