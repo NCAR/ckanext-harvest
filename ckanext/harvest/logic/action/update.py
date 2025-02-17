@@ -40,6 +40,8 @@ from itertools import islice
 
 from ckan.plugins.toolkit import render
 
+from ckanext.dsetsearch.group_api import getGroupNameFromID
+
 log = logging.getLogger(__name__)
 
 
@@ -746,10 +748,11 @@ def get_mail_extra_vars(context, source_id, status):
         for error in harvest_object_error:
             unreferenced_group_error = "Unreferenced Collection" in error['message']
             if unreferenced_group_error:
-                group_id = error['message'].split()[-1]
+                parent_id = error['message'].split()[-1]
+                group_name = getGroupNameFromID(parent_id)
                 try:
                     context.pop('__auth_audit', None)
-                    group_dict = logic.get_action('group_show')(context, {'id': group_id})
+                    group_dict = logic.get_action('group_show')(context, {'id': group_name})
                     is_updated_group = len(group_dict['extras']) > 0
                 except logic.NotFound:
                     is_updated_group = False
@@ -764,11 +767,14 @@ def get_mail_extra_vars(context, source_id, status):
                 try:
                     context.pop('__auth_audit', None)
                     group_dict = logic.get_action('group_show')(context, {'id': group_id})
-                    deleted_or_not_empty = group_dict['package_count'] > 0
+                    is_empty = group_dict['package_count'] == 0
+                    is_deleted = False
                 except logic.NotFound:
-                    deleted_or_not_empty = True
+                    log.debug('Group not found with ID {0}'.format(group_id))
+                    is_empty = True
+                    is_deleted = True
                 # If the group is not empty, skip this error; some dataset must have been added back to the group.
-                if deleted_or_not_empty:
+                if is_deleted or not is_empty:
                     # Do not add this warning/error to the final list
                     continue
 
