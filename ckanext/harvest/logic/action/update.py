@@ -3,6 +3,7 @@
 import hashlib
 import html
 import json
+import re
 
 import logging
 import datetime
@@ -12,6 +13,7 @@ from sqlalchemy import and_, or_
 from urllib.parse import urljoin
 
 from ckan.lib.search.index import PackageSearchIndex
+from ckan.lib.munge import munge_title_to_name
 from ckan.plugins import toolkit, PluginImplementations
 from ckan.logic import get_action
 from ckanext.harvest.interfaces import IHarvester
@@ -39,8 +41,6 @@ import ckan.lib.mailer as mailer
 from itertools import islice
 
 from ckan.plugins.toolkit import render
-
-from ckanext.dsetsearch.group_api import getGroupNameFromID
 
 log = logging.getLogger(__name__)
 
@@ -726,6 +726,12 @@ def harvest_jobs_run(context, data_dict):
     resubmit_objects()
 
     return []  # merely for backwards compatibility
+
+
+def getGroupNameFromID(group_id):
+    group_name = munge_title_to_name(group_id)
+    group_name = re.sub('-+', '-', group_name)  # collapse multiple dashes
+    return group_name
 
 
 def get_mail_extra_vars(context, source_id, status):
